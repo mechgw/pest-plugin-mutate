@@ -75,7 +75,7 @@ function mutateCode(string $mutator, string $code): string
 
 /**
  * Runs the mutation tests of the given scenario of the enum fixtures, mutating the
- * non-empty strings of the given class only, and returns the summary of the mutations.
+ * non-empty strings of the given class only, and returns their output.
  *
  * The classes are given with --class: mutates() would make Pest write a lock file
  * shared with this test suite, which restricts it to the mutated tests in parallel.
@@ -83,13 +83,13 @@ function mutateCode(string $mutator, string $code): string
  * @param  array<int, string>  $arguments
  * @param  array<string, string|false>  $env
  */
-function enumMutationTestSummary(string $scenario, string $class, array $arguments = [], array $env = []): string
+function enumMutationTestOutput(string $scenario, string $class, array $arguments = [], array $env = []): string
 {
     $process = new Process(
         [
             PHP_BINARY,
             'vendor/bin/pest',
-            '--configuration=tests/.tests/Enums/phpunit.xml',
+            '--configuration='.enumFixturesConfiguration(),
             'tests/.tests/Enums/'.$scenario,
             '--mutate',
             '--mutator=StringNotEmptyStringToEmpty',
@@ -102,7 +102,7 @@ function enumMutationTestSummary(string $scenario, string $class, array $argumen
             'COLUMNS' => '120',
             'XDEBUG_MODE' => 'coverage',
             'PEST_PLUGIN_INTERNAL_TEST_SUITE' => '1',
-            'PEST_MUTATE_SAME_LINE_ENUM' => sameLineEnum(),
+            'PEST_MUTATE_GENERATED_ENUMS' => dirname(enumFixturesConfiguration()),
             // when this test suite runs in parallel, the mutation tests must not run as a worker
             'PARATEST' => false,
             ...$env,
@@ -112,25 +112,41 @@ function enumMutationTestSummary(string $scenario, string $class, array $argumen
 
     $process->run();
 
-    if (preg_match('/Mutations: *(.+)/', $process->getOutput(), $matches) !== 1) {
-        throw new Exception($process->getOutput().$process->getErrorOutput());
+    return $process->getOutput().$process->getErrorOutput();
+}
+
+/**
+ * Returns the summary of the mutations of the given scenario of the enum fixtures.
+ *
+ * @param  array<int, string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function enumMutationTestSummary(string $scenario, string $class, array $arguments = [], array $env = []): string
+{
+    $output = enumMutationTestOutput($scenario, $class, $arguments, $env);
+
+    if (preg_match('/Mutations: *(.+)/', $output, $matches) !== 1) {
+        throw new Exception($output);
     }
 
     return trim($matches[1]);
 }
 
 /**
- * Two cases on one line are not allowed by the code style, so this enum is written at runtime.
+ * Writes the PHPUnit configuration of the enum fixtures, and returns its path. The code style
+ * does not allow two statements on one line, so the enum that needs it is written at runtime,
+ * next to the configuration that covers it. Like in most projects, the tests are not covered.
  */
-function sameLineEnum(): string
+function enumFixturesConfiguration(): string
 {
-    $file = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pest-mutate-same-line-enum'.DIRECTORY_SEPARATOR.'SameLine.php';
+    $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pest-mutate-enum-fixtures';
+    $root = dirname(__DIR__);
 
-    if (! is_dir(dirname($file))) {
-        mkdir(dirname($file));
+    if (! is_dir($directory)) {
+        mkdir($directory);
     }
 
-    file_put_contents($file, <<<'PHP'
+    file_put_contents($directory.DIRECTORY_SEPARATOR.'SameLine.php', <<<'PHP'
         <?php
 
         namespace Tests\Fixtures\Enums\Generated;
@@ -141,5 +157,22 @@ function sameLineEnum(): string
         }
         PHP);
 
-    return $file;
+    file_put_contents($directory.DIRECTORY_SEPARATOR.'phpunit.xml', <<<XML
+        <?xml version="1.0" encoding="UTF-8"?>
+        <phpunit bootstrap="{$root}/vendor/autoload.php" cacheDirectory="{$root}/.phpunit.cache" colors="true">
+            <testsuites>
+                <testsuite name="enums">
+                    <directory suffix="Test.php">{$root}/tests/.tests/Enums</directory>
+                </testsuite>
+            </testsuites>
+            <source>
+                <include>
+                    <directory suffix=".php">{$root}/tests/Fixtures/Enums</directory>
+                    <directory suffix=".php">{$directory}</directory>
+                </include>
+            </source>
+        </phpunit>
+        XML);
+
+    return $directory.DIRECTORY_SEPARATOR.'phpunit.xml';
 }

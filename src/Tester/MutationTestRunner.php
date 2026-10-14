@@ -136,7 +136,14 @@ class MutationTestRunner implements MutationTestRunnerContract
 
         $coveredLines = $this->coveredLines($coverageData);
 
-        $this->enumCaseTestFinder = $enumCaseTestFinder = EnumCaseTestFinder::fromLoadedTests($coveredLines);
+        /** @var TelemetryRepository $telemetryRepository */
+        $telemetryRepository = Container::getInstance()->get(TelemetryRepository::class);
+
+        // the tests of a parallel run are not executed by this process, but some are in the code coverage
+        $this->enumCaseTestFinder = $enumCaseTestFinder = EnumCaseTestFinder::fromExecutedTests(
+            $coveredLines,
+            array_values(array_unique([...$telemetryRepository->executedTests(), ...$coverageData->testIds()])),
+        );
 
         $files = FileFinder::files($this->getConfiguration()->paths, $this->getConfiguration()->pathsToIgnore);
 

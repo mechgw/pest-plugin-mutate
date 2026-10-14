@@ -8,6 +8,7 @@ use Pest\Contracts\Bootstrapper;
 use Pest\Mutate\Subscribers\DisplayInitialTestRunMessage;
 use Pest\Mutate\Subscribers\EnsureInitialTestRunWasSuccessful;
 use Pest\Mutate\Subscribers\PrepareForInitialTestRun;
+use Pest\Mutate\Subscribers\TrackExecutedTests;
 use Pest\Subscribers;
 use Pest\Support\Container;
 use PHPUnit\Event\Facade;
@@ -27,6 +28,7 @@ final readonly class BootPhpUnitSubscribers implements Bootstrapper
         DisplayInitialTestRunMessage::class,
         PrepareForInitialTestRun::class,
         EnsureInitialTestRunWasSuccessful::class,
+        TrackExecutedTests::class,
     ];
 
     /**

@@ -13,6 +13,7 @@ it('kills the mutants of the enum values checked by a test', function (array $ar
     'all the mutations' => [[]],
     'covered mutations only' => [['--covered-only']],
     'in parallel' => [['--parallel']],
+    'covered mutations only in parallel' => [['--covered-only', '--parallel']],
 ]);
 
 it('lets the mutants of the enum values read by a test without checking them escape', function (): void {
@@ -31,14 +32,20 @@ it('kills the mutants of the enum values used by covered source code', function 
 });
 
 it('tells apart the cases declared on the same line', function (): void {
-    $path = '--path='.dirname(sameLineEnum());
-
-    expect(enumMutationTestSummary('SameLineSecond', SameLine::class, [$path]))->toBe('1 untested, 1 tested')
+    expect(enumMutationTestSummary('SameLineSecond', SameLine::class))->toBe('1 untested, 1 tested')
         // a mutant of the first case would escape
-        ->and(enumMutationTestSummary('SameLineSecond', SameLine::class, [$path, '--covered-only']))->toBe('1 tested')
-        ->and(enumMutationTestSummary('SameLineFirst', SameLine::class, [$path, '--covered-only']))->toBe('1 tested')
+        ->and(enumMutationTestSummary('SameLineSecond', SameLine::class, ['--covered-only']))->toBe('1 tested')
+        ->and(enumMutationTestSummary('SameLineFirst', SameLine::class, ['--covered-only']))->toBe('1 tested')
         // the cached mutations of the line are filtered again for the tested case
-        ->and(enumMutationTestSummary('SameLineSecond', SameLine::class, [$path, '--covered-only']))->toBe('1 tested');
+        ->and(enumMutationTestSummary('SameLineSecond', SameLine::class, ['--covered-only']))->toBe('1 tested');
+});
+
+it('only considers the tests selected in a test file', function (): void {
+    $filter = '--filter=checks the draft value';
+
+    // the test of Published is in the same file, but not selected
+    expect(enumMutationTestSummary('Filtered', Status::class, [$filter, '--covered-only']))->toBe('1 tested')
+        ->and(enumMutationTestSummary('Filtered', Status::class, [$filter]))->toBe('1 untested, 1 tested');
 });
 
 it('runs all the selected tests only when the tests referencing the case do not kill the mutant', function (): void {
@@ -59,7 +66,10 @@ it('runs all the selected tests when the tests referencing the case do not kill 
 });
 
 it('does not consider a test run failing before running any test as killing the mutant', function (): void {
-    expect(enumMutationTestSummary('InfrastructureFailure', Single::class))->toBe('1 uncovered, 0 tested');
+    $output = enumMutationTestOutput('InfrastructureFailure', Single::class);
+
+    expect($output)->toContain('Mutations: 1 uncovered, 0 tested')
+        ->toContain('Not verified: the tests ended with exit code 2 and no JUnit report.');
 });
 
 it('reports a timeout when all the selected tests time out', function (): void {

@@ -37,6 +37,7 @@ it('is inconclusive when no test failed', function (?int $exitCode, string $juni
     'fatal error' => [255, ''],
     'process not started' => [1, ''],
     'process terminated by a signal' => [null, junitReport('<testcase name="a"/>')],
+    'process terminated by a signal after a failure' => [null, junitReport('<testcase name="a"><failure/></testcase>')],
     'truncated report' => [255, '<?xml version="1.0"?><testsuites><testsuite>'],
     'no test run' => [0, junitReport('')],
     'success without report' => [0, ''],

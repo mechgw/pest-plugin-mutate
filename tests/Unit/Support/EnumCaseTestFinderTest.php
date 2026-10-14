@@ -8,6 +8,7 @@ use Pest\Mutate\Mutators\String\NotEmptyStringToEmpty;
 use Pest\Mutate\Support\EnumCaseTestFinder;
 use Pest\Mutate\Support\MutationGenerator;
 use Symfony\Component\Finder\SplFileInfo;
+use Tests\Fixtures\Enums\PublicationCheck;
 use Tests\Fixtures\Enums\Single;
 
 beforeEach(function (): void {
@@ -67,7 +68,24 @@ beforeEach(function (): void {
         it('checks the second case', function () {
             expect(SameLine::Second->value)->toBe('SECOND');
         });
+
+        it('checks the first case', function () {
+            expect(SameLine::First->value)->toBe('FIRST');
+        });
         PHP);
+
+    // the lines of the code of the tests, as Pest reports them: the lines of their closure
+    $this->testCase = fn (string $file, string $description, array $ids): array => [
+        'ids' => $ids,
+        'startLine' => ($this->lineOf)($file, $description),
+        'endLine' => ($this->lineOf)($file, $description) + 2,
+    ];
+
+    // only the test of the second case was executed, e.g. with --filter
+    $this->sameLineTestCases = [$this->sameLineTest => [
+        ($this->testCase)($this->sameLineTest, 'checks the second case', ['P\\Tests\\SameLineTest::__pest_evaluable_it_checks_the_second_case']),
+        ($this->testCase)($this->sameLineTest, 'checks the first case', []),
+    ]];
 });
 
 it('ignores mutations outside the value of a string-backed enum case', function (): void {
@@ -129,15 +147,71 @@ it('resolves self references inside the enum', function (): void {
         ->toBe([]);
 });
 
-it('finds the class of a test file referencing the case and tells apart cases on the same line', function (): void {
-    $finder = new EnumCaseTestFinder([], [$this->sameLineTest => 'P\\Tests\\SameLineTest']);
+it('finds the executed tests whose code references the case and tells apart cases on the same line', function (): void {
+    $finder = new EnumCaseTestFinder([], $this->sameLineTestCases);
 
     $first = ($this->mutationOf)($this->sameLine, "'FIRST'");
     $second = ($this->mutationOf)($this->sameLine, "'SECOND'");
 
     expect($first->startLine)->toBe($second->startLine)
-        ->and($finder->candidateTestIds($second))->toBe(['P\\Tests\\SameLineTest::'])
+        ->and($finder->candidateTestIds($second))->toBe(['P\\Tests\\SameLineTest::__pest_evaluable_it_checks_the_second_case'])
+        // referenced only by a test of the same file that was not executed
         ->and($finder->candidateTestIds($first))->toBe([]);
+});
+
+it('finds all the executed tests of the file for a reference outside of any test', function (): void {
+    $test = ($this->temporaryFile)(<<<'PHP'
+        <?php
+
+        use Tests\Fixtures\Enums\Generated\SameLine;
+
+        beforeEach(function () {
+            $this->first = SameLine::First->value;
+        });
+
+        it('checks the first case', function () {
+            expect($this->first)->toBe('FIRST');
+        });
+
+        it('does something else', function () {
+            expect(true)->toBeTrue();
+        });
+        PHP);
+
+    $finder = new EnumCaseTestFinder([], [$test => [
+        ($this->testCase)($test, 'checks the first case', ['T::first']),
+        ($this->testCase)($test, 'does something else', []),
+    ]]);
+
+    expect($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'FIRST'")))->toBe(['T::first']);
+});
+
+it('finds the test referencing the case in its dataset', function (): void {
+    $test = ($this->temporaryFile)(<<<'PHP'
+        <?php
+
+        use Tests\Fixtures\Enums\Generated\SameLine;
+
+        it('checks a case', function (string $value) {
+            expect($value)->not->toBeEmpty();
+        })->with([
+            SameLine::First->value,
+        ]);
+
+        it('checks another case', function (string $value) {
+            expect($value)->not->toBeEmpty();
+        })->with([
+            SameLine::Second->value,
+        ]);
+        PHP);
+
+    $finder = new EnumCaseTestFinder([], [$test => [
+        ($this->testCase)($test, 'checks a case', ['T::a#0']),
+        ($this->testCase)($test, 'checks another case', []),
+    ]]);
+
+    expect($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'FIRST'")))->toBe(['T::a#0'])
+        ->and($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'SECOND'")))->toBe([]);
 });
 
 it('runs every selected test for a mutation cached without its position', function (): void {
@@ -153,13 +227,13 @@ it('runs every selected test for a mutation cached without its position', functi
         $second->modifiedSourcePath,
     );
 
-    $finder = new EnumCaseTestFinder([], [$this->sameLineTest => 'P\\Tests\\SameLineTest']);
+    $finder = new EnumCaseTestFinder([], $this->sameLineTestCases);
 
     expect($finder->candidateTestIds($cachedByPreviousVersion))->toBe([]);
 });
 
 it('returns the position of the referenced case values only', function (): void {
-    $finder = new EnumCaseTestFinder([], [$this->sameLineTest => 'P\\Tests\\SameLineTest']);
+    $finder = new EnumCaseTestFinder([], $this->sameLineTestCases);
 
     $second = ($this->mutationOf)($this->sameLine, "'SECOND'");
     $contents = (string) file_get_contents($this->sameLine);
@@ -175,11 +249,25 @@ it('returns the position of the referenced case values only', function (): void 
         ->and($finder->referencedCaseValues($this->fixtures.'/PublicationLabel.php'))->toBe([]);
 });
 
-it('finds the loaded test files', function (): void {
+it('locates the code of the executed Pest tests', function (): void {
     expect(Single::Only->value)->toBe('only');
 
-    $finder = EnumCaseTestFinder::fromLoadedTests([]);
+    $id = $this::class.'::'.$this->name();
 
-    expect($finder->candidateTestIds(($this->mutationOf)($this->fixtures.'/Single.php', "'only'")))
-        ->toContain($this::class.'::');
+    expect(EnumCaseTestFinder::fromExecutedTests([], [$id])->candidateTestIds(($this->mutationOf)($this->fixtures.'/Single.php', "'only'")))
+        ->toBe([$id])
+        ->and(EnumCaseTestFinder::fromExecutedTests([], [])->candidateTestIds(($this->mutationOf)($this->fixtures.'/Single.php', "'only'")))
+        ->toBe([]);
+});
+
+it('locates the code of the executed PHPUnit tests', function (): void {
+    class_exists(PublicationCheck::class);
+
+    $finder = EnumCaseTestFinder::fromExecutedTests([], [PublicationCheck::class.'::test_draft']);
+
+    expect($finder->candidateTestIds(($this->mutationOf)($this->fixtures.'/Status.php', "'draft'")))
+        ->toBe([PublicationCheck::class.'::test_draft'])
+        // referenced only by a test method that was not executed
+        ->and($finder->candidateTestIds(($this->mutationOf)($this->fixtures.'/Status.php', "'published'")))
+        ->toBe([]);
 });

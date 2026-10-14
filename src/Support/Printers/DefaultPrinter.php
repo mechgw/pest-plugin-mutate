@@ -204,6 +204,10 @@ class DefaultPrinter implements Printer
             '  <fg=default;bg='.$color.';options=bold> '.$label.' </> <fg=default;options=bold>'.$path.' <fg=gray> > Line '.$test->mutation->startLine.': '.$test->mutation->mutator::name().' - ID: '.$test->getId().'</>', // @pest-mutate-ignore
         ]);
 
+        if ($test->inconclusiveReason() !== null) {
+            $this->output->writeln('  <fg=yellow>'.$test->inconclusiveReason().'</>');
+        }
+
         $diff = $test->mutation->diff;
         $this->output->writeln($diff);
     }

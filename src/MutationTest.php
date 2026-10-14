@@ -37,6 +37,11 @@ class MutationTest
      */
     private ?Process $fallbackProcess = null;
 
+    /**
+     * Why the tests of an enum case value could not tell whether the mutant is killed.
+     */
+    private ?string $inconclusiveReason = null;
+
     public function __construct(public readonly Mutation $mutation) {}
 
     public function getId(): string
@@ -47,6 +52,11 @@ class MutationTest
     public function result(): MutationTestResult
     {
         return $this->result;
+    }
+
+    public function inconclusiveReason(): ?string
+    {
+        return $this->inconclusiveReason;
     }
 
     public function updateResult(MutationTestResult $result): void
@@ -69,7 +79,8 @@ class MutationTest
         }
         $filters = $this->filters($tests);
 
-        $candidateTests = $filters === [] ? $enumCaseTestFinder?->candidateTestIds($this->mutation) : null;
+        // the value of an enum case may share its line with covered code that does not depend on it
+        $candidateTests = $enumCaseTestFinder?->candidateTestIds($this->mutation);
 
         if ($filters === [] && $candidateTests === null) {
             $this->updateResult(MutationTestResult::Uncovered);
@@ -95,7 +106,7 @@ class MutationTest
         $filteredArguments = array_filter($originalArguments, fn (string $argument): bool => ! str_starts_with($argument, '--coverage'));
 
         if ($candidateTests !== null) {
-            $this->startEnumCaseValueVerification($filteredArguments, $envs, $this->filters($candidateTests));
+            $this->startEnumCaseValueVerification($filteredArguments, $envs, $this->filters([...$tests, ...$candidateTests]));
 
             return true;
         }
@@ -188,13 +199,22 @@ class MutationTest
 
     private function finishEnumCaseValueVerification(): bool
     {
-        $outcome = TestRunOutcome::fromJunit($this->process->getExitCode(), $this->readJunitReport());
+        $junit = $this->readJunitReport();
+        $outcome = TestRunOutcome::fromJunit($this->process->getExitCode(), $junit);
 
         if ($outcome !== TestRunOutcome::Failed && $this->startFallbackProcess()) {
             return false;
         }
 
         $this->junitPath = null;
+
+        if ($outcome === TestRunOutcome::Inconclusive) {
+            $this->inconclusiveReason = sprintf(
+                'Not verified: the tests ended with exit code %s and %s.',
+                $this->process->getExitCode() ?? 'unknown',
+                $junit === '' ? 'no JUnit report' : 'no reliable test failure in their JUnit report',
+            );
+        }
 
         $this->updateResult(match ($outcome) {
             TestRunOutcome::Failed => MutationTestResult::Tested,

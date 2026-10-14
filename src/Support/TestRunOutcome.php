@@ -41,10 +41,11 @@ enum TestRunOutcome
             return self::Inconclusive;
         }
 
-        if ($exitCode === 0) {
-            return $tests->length > 0 && $defects->length === 0 ? self::Passed : self::Inconclusive;
-        }
-
-        return $defects->length > 0 ? self::Failed : self::Inconclusive;
+        return match (true) {
+            // terminated by a signal, or the status could not be read
+            $exitCode === null => self::Inconclusive,
+            $exitCode === 0 => $tests->length > 0 && $defects->length === 0 ? self::Passed : self::Inconclusive,
+            default => $defects->length > 0 ? self::Failed : self::Inconclusive,
+        };
     }
 }

@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Pest\Mutate\Support;
 
+use Closure;
 use Pest\Mutate\Factories\NodeTraverserFactory;
 use Pest\Mutate\Mutation;
+use Pest\Support\Str;
+use Pest\TestSuite;
 use PhpParser\Error;
 use PhpParser\Node;
 use PhpParser\Node\Expr\ClassConstFetch;
@@ -17,14 +20,16 @@ use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\EnumCase;
 use PhpParser\NodeFinder;
-use PHPUnit\Framework\TestCase;
+use PHPUnit\Framework\Attributes\Test;
 use ReflectionClass;
+use ReflectionFunction;
+use ReflectionMethod;
 
 /**
  * The value of a case of a string-backed enum is not an executable line, so line coverage
- * never tells which tests depend on it. This finds the tests that may observe such a value:
- * the tests covering a statement that references the case, and the tests of a loaded test
- * file that references the case.
+ * never tells which tests depend on it. This finds the executed tests that may observe such a
+ * value: the tests covering a statement that references the case, and the tests whose own code
+ * references the case in their test file.
  *
  * These tests are only candidates, run first to kill a mutant quickly: when none of them
  * fails, the mutant must still be verified against all the originally selected tests.
@@ -50,50 +55,90 @@ final class EnumCaseTestFinder
 
     /**
      * @param  array<string, array<int, array<int, string>>>  $coveredLines
-     * @param  array<string, string>  $testFiles  the test class declared by each loaded test file
+     * @param  array<string, array<int, array{ids: array<int, string>, startLine: int, endLine: int}>>  $testCases  the tests declared by each test file having executed tests, with the lines of their code and the ids of their executions, if any
      */
     public function __construct(
         private readonly array $coveredLines,
-        private readonly array $testFiles,
+        private readonly array $testCases,
     ) {}
 
     /**
      * @param  array<string, array<int, array<int, string>>>  $coveredLines
+     * @param  array<int, string>  $executedTestIds
      */
-    public static function fromLoadedTests(array $coveredLines): self
+    public static function fromExecutedTests(array $coveredLines, array $executedTestIds): self
     {
-        $testFiles = [];
+        $executions = [];
 
-        foreach (get_declared_classes() as $class) {
-            if (! is_subclass_of($class, TestCase::class)) {
-                continue;
-            }
-
-            $reflection = new ReflectionClass($class);
-
-            if ($reflection->isAbstract()) {
-                continue;
-            }
-
-            // classes of Pest test files are evaluated, their file is kept in a static property
-            $file = $reflection->hasProperty('__filename') && $reflection->getProperty('__filename')->isStatic()
-                ? $reflection->getStaticPropertyValue('__filename')
-                : $reflection->getFileName();
-
-            if (is_string($file) && is_file($file)) {
-                $testFiles[$file] = $class;
+        foreach ($executedTestIds as $testId) {
+            // the id of a test run with a dataset ends with the name of the data set
+            if (preg_match('/^([^:\s]+)::([a-zA-Z0-9_\x80-\xff]+)/', $testId, $matches) === 1) {
+                $executions[$matches[1]][$matches[2]][] = $testId;
             }
         }
 
-        return new self($coveredLines, $testFiles);
+        $testCases = [];
+
+        foreach ($executions as $class => $methods) {
+            if (! class_exists($class, false)) {
+                continue;
+            }
+
+            foreach (self::testsOfClass(new ReflectionClass($class), $methods) as $file => $tests) {
+                $testCases[$file] = [...$testCases[$file] ?? [], ...$tests];
+            }
+        }
+
+        return new self($coveredLines, $testCases);
+    }
+
+    /**
+     * Returns the tests of the given class, executed or not, with the lines of their code.
+     *
+     * @param  ReflectionClass<object>  $class
+     * @param  array<string, array<int, string>>  $executions
+     * @return array<string, array<int, array{ids: array<int, string>, startLine: int, endLine: int}>>
+     */
+    private static function testsOfClass(ReflectionClass $class, array $executions): array
+    {
+        $code = [];
+
+        // the class of a Pest test file is evaluated: the code of each test is a closure
+        if ($class->hasProperty('__filename') && $class->getProperty('__filename')->isStatic()) {
+            $file = $class->getStaticPropertyValue('__filename');
+            $factory = is_string($file) ? TestSuite::getInstance()->tests->get($file) : null;
+
+            foreach ($factory->methods ?? [] as $method) {
+                if ($method->description !== null && $method->closure instanceof Closure) {
+                    $code[Str::evaluable($method->description)] = new ReflectionFunction($method->closure);
+                }
+            }
+        } else {
+            foreach ($class->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+                if (isset($executions[$method->getName()]) || str_starts_with($method->getName(), 'test') || $method->getAttributes(Test::class) !== []) {
+                    $code[$method->getName()] = $method;
+                }
+            }
+        }
+
+        $tests = [];
+
+        foreach ($code as $name => $function) {
+            $file = $function->getFileName();
+            $startLine = $function->getStartLine();
+            $endLine = $function->getEndLine();
+
+            if ($file !== false && $startLine !== false && $endLine !== false) {
+                $tests[$file][] = ['ids' => $executions[$name] ?? [], 'startLine' => $startLine, 'endLine' => $endLine];
+            }
+        }
+
+        return $tests;
     }
 
     /**
      * Returns the ids of the tests to run first to kill the given mutation, or null when the
      * mutation is not in the value of a case of a string-backed enum.
-     *
-     * The id of a test referencing the case in its test file is its class name followed by
-     * "::", to run every test of the class.
      *
      * @return array<int, string>|null
      */
@@ -126,7 +171,7 @@ final class EnumCaseTestFinder
 
     /**
      * Returns the position ranges of the case values of the string-backed enums in the given
-     * file that are referenced by a covered statement or by a loaded test file.
+     * file that are referenced by a covered statement or by the code of an executed test.
      *
      * @return array<int, array{startFilePos: int, endFilePos: int, startLine: int, endLine: int}>
      */
@@ -211,7 +256,7 @@ final class EnumCaseTestFinder
 
         $testIds = [];
 
-        foreach (array_unique([...array_keys($this->coveredLines), ...array_keys($this->testFiles)]) as $file) {
+        foreach (array_unique([...array_keys($this->coveredLines), ...array_keys($this->testCases)]) as $file) {
             $contents = is_file($file) ? file_get_contents($file) : false;
 
             // a reference, or the import it relies on, names the enum
@@ -219,20 +264,73 @@ final class EnumCaseTestFinder
                 continue;
             }
 
-            foreach ($this->references($this->parse($contents), $enum) as [$case, $stmt]) {
+            $nodes = $this->parse($contents);
+            $testCases = $this->widenToStatements($nodes, $this->testCases[$file] ?? []);
+
+            foreach ($this->references($nodes, $enum) as [$case, $stmt]) {
                 foreach ($this->coveredLines[$file] ?? [] as $line => $ids) {
                     if ($line >= $stmt->getStartLine() && $line <= $stmt->getEndLine()) {
                         $testIds[$case] = [...$testIds[$case] ?? [], ...$ids];
                     }
                 }
 
-                if (isset($this->testFiles[$file])) {
-                    $testIds[$case][] = $this->testFiles[$file].'::';
-                }
+                $testIds[$case] = [...$testIds[$case] ?? [], ...$this->executionsReaching($testCases, $stmt)];
             }
         }
 
         return array_map(fn (array $ids): array => array_values(array_unique($ids)), $testIds);
+    }
+
+    /**
+     * Widens the lines of the code of each test to the innermost statement containing it, so
+     * that the statement declaring a test, with its dataset, belongs to the test.
+     *
+     * @param  array<int, Node>  $nodes
+     * @param  array<int, array{ids: array<int, string>, startLine: int, endLine: int}>  $testCases
+     * @return array<int, array{ids: array<int, string>, startLine: int, endLine: int}>
+     */
+    private function widenToStatements(array $nodes, array $testCases): array
+    {
+        $stmts = (new NodeFinder)->findInstanceOf($nodes, Stmt::class);
+
+        foreach ($testCases as $index => $testCase) {
+            $innermost = null;
+
+            foreach ($stmts as $stmt) {
+                if ($stmt->getStartLine() > $testCase['startLine'] || $stmt->getEndLine() < $testCase['endLine']) {
+                    continue;
+                }
+
+                if (! $innermost instanceof Stmt || $stmt->getEndLine() - $stmt->getStartLine() < $innermost->getEndLine() - $innermost->getStartLine()) {
+                    $innermost = $stmt;
+                }
+            }
+
+            if ($innermost instanceof Stmt) {
+                $testCases[$index]['startLine'] = $innermost->getStartLine();
+                $testCases[$index]['endLine'] = $innermost->getEndLine();
+            }
+        }
+
+        return $testCases;
+    }
+
+    /**
+     * Returns the ids of the executions of the tests whose code contains the given statement. A
+     * statement outside of any test, like a hook or a helper, reaches all the executed tests of
+     * the file; a statement of tests that were not executed reaches none.
+     *
+     * @param  array<int, array{ids: array<int, string>, startLine: int, endLine: int}>  $testCases
+     * @return array<int, string>
+     */
+    private function executionsReaching(array $testCases, Stmt $stmt): array
+    {
+        $containing = array_filter($testCases, fn (array $testCase): bool => $stmt->getStartLine() >= $testCase['startLine'] && $stmt->getEndLine() <= $testCase['endLine']);
+
+        $outsideOfTests = $containing === []
+            && array_filter($testCases, fn (array $testCase): bool => $stmt->getEndLine() >= $testCase['startLine'] && $stmt->getStartLine() <= $testCase['endLine']) === [];
+
+        return array_merge(...array_column($outsideOfTests ? $testCases : $containing, 'ids'));
     }
 
     /**
