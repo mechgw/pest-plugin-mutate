@@ -8,12 +8,14 @@ use Composer\InstalledVersions;
 use Pest\Mutate\Contracts\MutationTestRunner as MutationTestRunnerContract;
 use Pest\Mutate\Contracts\Printer;
 use Pest\Mutate\Event\Facade;
+use Pest\Mutate\Mutation;
 use Pest\Mutate\MutationSuite;
 use Pest\Mutate\MutationTest;
 use Pest\Mutate\Plugins\Mutate;
 use Pest\Mutate\Repositories\ConfigurationRepository;
 use Pest\Mutate\Repositories\TelemetryRepository;
 use Pest\Mutate\Support\Configuration\Configuration;
+use Pest\Mutate\Support\EnumCaseTestFinder;
 use Pest\Mutate\Support\FileFinder;
 use Pest\Mutate\Support\MutationGenerator;
 use Pest\Support\Container;
@@ -41,6 +43,8 @@ class MutationTestRunner implements MutationTestRunnerContract
     private array $runningTests;
 
     private float $startTime;
+
+    private ?EnumCaseTestFinder $enumCaseTestFinder = null;
 
     public static function fake(): MutationTestRunnerFake
     {
@@ -132,6 +136,8 @@ class MutationTestRunner implements MutationTestRunnerContract
 
         $coveredLines = $this->coveredLines($coverageData);
 
+        $this->enumCaseTestFinder = $enumCaseTestFinder = EnumCaseTestFinder::fromLoadedTests($coveredLines);
+
         $files = FileFinder::files($this->getConfiguration()->paths, $this->getConfiguration()->pathsToIgnore);
 
         /** @var MutationGenerator $generator */
@@ -139,23 +145,37 @@ class MutationTestRunner implements MutationTestRunnerContract
 
         foreach ($files as $file) {
             $linesToMutate = [];
+            $coveredFileLines = [];
+            $referencedCaseValues = [];
 
             if ($this->getConfiguration()->coveredOnly) {
+                $coveredFileLines = array_keys($coveredLines[$file->getRealPath()] ?? []);
 
-                if (! isset($coveredLines[$file->getRealPath()])) {
+                // the value of an enum case is never covered, but it is used when the case is referenced
+                $referencedCaseValues = $enumCaseTestFinder->referencedCaseValues((string) $file->getRealPath());
+
+                if ($coveredFileLines === [] && $referencedCaseValues === []) {
                     continue;
                 }
 
-                $linesToMutate = array_keys($coveredLines[$file->getRealPath()]);
+                $linesToMutate = $coveredFileLines;
+
+                foreach ($referencedCaseValues as $caseValue) {
+                    array_push($linesToMutate, ...range($caseValue['startLine'], $caseValue['endLine']));
+                }
             }
 
             foreach ($generator->generate(
                 file: $file,
                 mutators: $this->getConfiguration()->mutators,
-                linesToMutate: $linesToMutate,
+                linesToMutate: array_values(array_unique($linesToMutate)),
                 classesToMutate: $this->getConfiguration()->everything ? [] : $this->getConfiguration()->classes,
             ) as $mutation) {
                 if ($this->getConfiguration()->mutationId !== null && $mutation->id !== $this->getConfiguration()->mutationId) {
+                    continue;
+                }
+
+                if ($referencedCaseValues !== [] && ! $this->isCoveredOrInCaseValue($mutation, $coveredFileLines, $referencedCaseValues)) {
                     continue;
                 }
 
@@ -189,6 +209,22 @@ class MutationTestRunner implements MutationTestRunnerContract
         Facade::instance()->emitter()->finishMutationSuite($mutationSuite);
 
         return $this->isMinScoreIsReached($mutationSuite) ? 0 : 1;
+    }
+
+    /**
+     * A line holding the value of a referenced enum case may hold other code, or the value
+     * of another case, that must not be mutated unless covered.
+     *
+     * @param  array<int, int>  $coveredFileLines
+     * @param  array<int, array{startFilePos: int, endFilePos: int, startLine: int, endLine: int}>  $caseValues
+     */
+    private function isCoveredOrInCaseValue(Mutation $mutation, array $coveredFileLines, array $caseValues): bool
+    {
+        if (array_intersect(range($mutation->startLine, $mutation->endLine), $coveredFileLines) !== []) {
+            return true;
+        }
+
+        return array_any($caseValues, fn (array $caseValue): bool => $mutation->startFilePos !== null && $mutation->startFilePos >= $caseValue['startFilePos'] && $mutation->startFilePos <= $caseValue['endFilePos']);
     }
 
     /**
@@ -282,7 +318,7 @@ class MutationTestRunner implements MutationTestRunnerContract
             }
 
             $processId = (int) array_key_first(array_filter($this->runningTests, fn (?MutationTest $process): bool => ! $process instanceof MutationTest));
-            if ($test->start($coveredLines, $this->getConfiguration(), $this->originalArguments, $processId)) {
+            if ($test->start($coveredLines, $this->getConfiguration(), $this->originalArguments, $processId, $this->enumCaseTestFinder)) {
                 $this->runningTests[$processId] = $test;
             }
         }
@@ -305,7 +341,7 @@ class MutationTestRunner implements MutationTestRunnerContract
                     break 2;
                 }
 
-                if ($test->start($coveredLines, $this->getConfiguration(), $this->originalArguments)) {
+                if ($test->start($coveredLines, $this->getConfiguration(), $this->originalArguments, enumCaseTestFinder: $this->enumCaseTestFinder)) {
                     while (! $test->hasFinished()) {
                         usleep(1000);
                     }

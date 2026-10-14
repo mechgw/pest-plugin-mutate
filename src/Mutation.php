@@ -35,6 +35,7 @@ class Mutation
         public readonly int $endLine,
         public readonly string $diff,
         public readonly string $modifiedSourcePath,
+        public readonly ?int $startFilePos = null,
     ) {}
 
     /**
@@ -78,6 +79,7 @@ class Mutation
             $endLine,
             self::diff($newlyRenderedOriginalSource, $modifiedSource),
             $modifiedSourcePath,
+            $originalNode->getStartFilePos(),
         );
     }
 
@@ -122,7 +124,7 @@ class Mutation
     }
 
     /**
-     * @return array{file: string, id: string, mutator: string, start_line: int, end_line: int, diff: string, modified_source_path: string}
+     * @return array{file: string, id: string, mutator: string, start_line: int, end_line: int, diff: string, modified_source_path: string, start_file_pos: int|null}
      */
     public function __serialize(): array
     {
@@ -134,11 +136,12 @@ class Mutation
             'end_line' => $this->endLine,
             'diff' => $this->diff,
             'modified_source_path' => $this->modifiedSourcePath,
+            'start_file_pos' => $this->startFilePos,
         ];
     }
 
     /**
-     * @param  array{file: string, id: string, mutator: string, start_line: int, end_line: int, diff: string, modified_source_path: string}  $data
+     * @param  array{file: string, id: string, mutator: string, start_line: int, end_line: int, diff: string, modified_source_path: string, start_file_pos?: int|null}  $data
      */
     public function __unserialize(array $data): void
     {
@@ -149,5 +152,7 @@ class Mutation
         $this->endLine = $data['end_line'];
         $this->diff = $data['diff'];
         $this->modifiedSourcePath = $data['modified_source_path'];
+        // entries cached by previous versions have no position
+        $this->startFilePos = $data['start_file_pos'] ?? null;
     }
 }

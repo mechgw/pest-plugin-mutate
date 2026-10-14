@@ -72,3 +72,74 @@ function mutateCode(string $mutator, string $code): string
 
     return $prettyPrinter->prettyPrintFile($newStmts);
 }
+
+/**
+ * Runs the mutation tests of the given scenario of the enum fixtures, mutating the
+ * non-empty strings of the given class only, and returns the summary of the mutations.
+ *
+ * The classes are given with --class: mutates() would make Pest write a lock file
+ * shared with this test suite, which restricts it to the mutated tests in parallel.
+ *
+ * @param  array<int, string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function enumMutationTestSummary(string $scenario, string $class, array $arguments = [], array $env = []): string
+{
+    $process = new Process(
+        [
+            PHP_BINARY,
+            'vendor/bin/pest',
+            '--configuration=tests/.tests/Enums/phpunit.xml',
+            'tests/.tests/Enums/'.$scenario,
+            '--mutate',
+            '--mutator=StringNotEmptyStringToEmpty',
+            '--class='.$class,
+            '--colors=never',
+            ...$arguments,
+        ],
+        dirname(__DIR__),
+        [
+            'COLUMNS' => '120',
+            'XDEBUG_MODE' => 'coverage',
+            'PEST_PLUGIN_INTERNAL_TEST_SUITE' => '1',
+            'PEST_MUTATE_SAME_LINE_ENUM' => sameLineEnum(),
+            // when this test suite runs in parallel, the mutation tests must not run as a worker
+            'PARATEST' => false,
+            ...$env,
+        ],
+        timeout: 120,
+    );
+
+    $process->run();
+
+    if (preg_match('/Mutations: *(.+)/', $process->getOutput(), $matches) !== 1) {
+        throw new Exception($process->getOutput().$process->getErrorOutput());
+    }
+
+    return trim($matches[1]);
+}
+
+/**
+ * Two cases on one line are not allowed by the code style, so this enum is written at runtime.
+ */
+function sameLineEnum(): string
+{
+    $file = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pest-mutate-same-line-enum'.DIRECTORY_SEPARATOR.'SameLine.php';
+
+    if (! is_dir(dirname($file))) {
+        mkdir(dirname($file));
+    }
+
+    file_put_contents($file, <<<'PHP'
+        <?php
+
+        namespace Tests\Fixtures\Enums\Generated;
+
+        enum SameLine: string
+        {
+            case First = 'FIRST'; case Second = 'SECOND';
+        }
+        PHP);
+
+    return $file;
+}
