@@ -11,12 +11,16 @@ use Pest\Support\Str;
 use Pest\TestSuite;
 use PhpParser\Error;
 use PhpParser\Node;
+use PhpParser\Node\Expr\CallLike;
 use PhpParser\Node\Expr\ClassConstFetch;
+use PhpParser\Node\Expr\FuncCall;
+use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\StaticCall;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Stmt;
 use PhpParser\Node\Stmt\ClassLike;
+use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\EnumCase;
 use PhpParser\NodeFinder;
@@ -42,6 +46,15 @@ final class EnumCaseTestFinder
     private const array METHODS_REFERENCING_ALL_CASES = ['from', 'tryfrom', 'cases'];
 
     private const string ALL_CASES = '*';
+
+    /**
+     * The hooks run around the tests of their file, or of their describe block.
+     */
+    private const array PEST_HOOKS = ['beforeeach', 'aftereach', 'beforeall', 'afterall'];
+
+    private const array PHPUNIT_HOOK_METHODS = ['setup', 'teardown', 'setupbeforeclass', 'teardownafterclass', 'assertpreconditions', 'assertpostconditions'];
+
+    private const array PHPUNIT_HOOK_ATTRIBUTES = ['before', 'after', 'beforeclass', 'afterclass', 'precondition', 'postcondition'];
 
     /**
      * @var array<string, array<int, array{enum: string, case: string, startFilePos: int, endFilePos: int, startLine: int, endLine: int}>>
@@ -267,14 +280,14 @@ final class EnumCaseTestFinder
             $nodes = $this->parse($contents);
             $testCases = $this->widenToStatements($nodes, $this->testCases[$file] ?? []);
 
-            foreach ($this->references($nodes, $enum) as [$case, $stmt]) {
+            foreach ($this->references($nodes, $enum) as [$case, $stmt, $reference]) {
                 foreach ($this->coveredLines[$file] ?? [] as $line => $ids) {
                     if ($line >= $stmt->getStartLine() && $line <= $stmt->getEndLine()) {
                         $testIds[$case] = [...$testIds[$case] ?? [], ...$ids];
                     }
                 }
 
-                $testIds[$case] = [...$testIds[$case] ?? [], ...$this->executionsReaching($testCases, $stmt)];
+                $testIds[$case] = [...$testIds[$case] ?? [], ...$this->executionsReaching($testCases, $stmt, $reference)];
             }
         }
 
@@ -316,29 +329,95 @@ final class EnumCaseTestFinder
     }
 
     /**
-     * Returns the ids of the executions of the tests whose code contains the given statement. A
-     * statement outside of any test, like a hook or a helper, reaches all the executed tests of
-     * the file; a statement of tests that were not executed reaches none.
+     * Returns the ids of the executions of the tests whose code contains the given statement, or
+     * of the executed tests around which the hook containing it runs. Any other code of a test
+     * file, like a helper, may run for none of the executed tests: it reaches none.
      *
      * @param  array<int, array{ids: array<int, string>, startLine: int, endLine: int}>  $testCases
      * @return array<int, string>
      */
-    private function executionsReaching(array $testCases, Stmt $stmt): array
+    private function executionsReaching(array $testCases, Stmt $stmt, Node $reference): array
     {
         $containing = array_filter($testCases, fn (array $testCase): bool => $stmt->getStartLine() >= $testCase['startLine'] && $stmt->getEndLine() <= $testCase['endLine']);
 
-        $outsideOfTests = $containing === []
-            && array_filter($testCases, fn (array $testCase): bool => $stmt->getEndLine() >= $testCase['startLine'] && $stmt->getStartLine() <= $testCase['endLine']) === [];
+        if ($containing === []) {
+            $scope = $this->hookScope($reference);
 
-        return array_merge(...array_column($outsideOfTests ? $testCases : $containing, 'ids'));
+            $containing = $scope === null ? [] : array_filter($testCases, fn (array $testCase): bool => $testCase['startLine'] >= $scope[0] && $testCase['endLine'] <= $scope[1]);
+        }
+
+        return array_merge(...array_column($containing, 'ids'));
     }
 
     /**
-     * Returns the referenced case of the given enum, or "*" for any case, and the innermost
-     * statement containing the reference.
+     * Returns the lines of the tests around which the hook containing the given node runs: the
+     * tests of its describe block, of its class, or of its file. Null when it is not in a hook.
+     *
+     * @return array{0: int, 1: int}|null
+     */
+    private function hookScope(Node $node): ?array
+    {
+        $hook = null;
+
+        for ($parent = $node->getAttribute('parent'); $parent instanceof Node; $parent = $parent->getAttribute('parent')) {
+            if (! $hook instanceof Node) {
+                if ($this->isHook($parent)) {
+                    $hook = $parent;
+                }
+
+                continue;
+            }
+
+            if ($parent instanceof ClassLike || ($parent instanceof FuncCall && $this->callName($parent) === 'describe')) {
+                return [$parent->getStartLine(), $parent->getEndLine()];
+            }
+        }
+
+        return $hook instanceof Node ? [0, PHP_INT_MAX] : null;
+    }
+
+    private function isHook(Node $node): bool
+    {
+        if ($node instanceof CallLike) {
+            return in_array($this->callName($node), self::PEST_HOOKS, true);
+        }
+
+        if (! $node instanceof ClassMethod) {
+            return false;
+        }
+
+        if (in_array($node->name->toLowerString(), self::PHPUNIT_HOOK_METHODS, true)) {
+            return true;
+        }
+
+        foreach ($node->attrGroups as $attrGroup) {
+            foreach ($attrGroup->attrs as $attribute) {
+                if (in_array(strtolower($attribute->name->getLast()), self::PHPUNIT_HOOK_ATTRIBUTES, true)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function callName(CallLike $call): ?string
+    {
+        $name = match (true) {
+            $call instanceof FuncCall => $call->name,
+            $call instanceof MethodCall, $call instanceof StaticCall => $call->name,
+            default => null,
+        };
+
+        return $name instanceof Name || $name instanceof Identifier ? $name->toLowerString() : null;
+    }
+
+    /**
+     * Returns the referenced case of the given enum, or "*" for any case, the innermost
+     * statement containing the reference, and the reference.
      *
      * @param  array<int, Node>  $nodes
-     * @return array<int, array{0: string, 1: Stmt}>
+     * @return array<int, array{0: string, 1: Stmt, 2: Node}>
      */
     private function references(array $nodes, string $enum): array
     {
@@ -373,7 +452,7 @@ final class EnumCaseTestFinder
             }
 
             if ($stmt instanceof Stmt) {
-                $references[] = [$name, $stmt];
+                $references[] = [$name, $stmt, $node];
             }
         }
 

@@ -186,6 +186,96 @@ it('finds all the executed tests of the file for a reference outside of any test
     expect($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'FIRST'")))->toBe(['T::first']);
 });
 
+it('does not consider a helper of the test file as run by the executed tests', function (): void {
+    $test = ($this->temporaryFile)(<<<'PHP'
+        <?php
+
+        use Tests\Fixtures\Enums\Generated\SameLine;
+
+        function second(): string
+        {
+            return SameLine::Second->value;
+        }
+
+        it('checks the first case', function () {
+            expect(SameLine::First->value)->toBe('FIRST');
+        });
+        PHP);
+
+    $finder = new EnumCaseTestFinder([], [$test => [
+        ($this->testCase)($test, 'checks the first case', ['T::first']),
+    ]]);
+
+    expect($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'FIRST'")))->toBe(['T::first'])
+        ->and($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'SECOND'")))->toBe([]);
+});
+
+it('finds the executed tests of the describe block of a hook', function (): void {
+    $test = ($this->temporaryFile)(<<<'PHP'
+        <?php
+
+        use Tests\Fixtures\Enums\Generated\SameLine;
+
+        describe('second', function () {
+            beforeEach(function () {
+                $this->second = SameLine::Second->value;
+            });
+
+            it('checks the second case', function () {
+                expect($this->second)->toBe('SECOND');
+            });
+        });
+
+        it('checks the first case', function () {
+            expect(SameLine::First->value)->toBe('FIRST');
+        });
+        PHP);
+
+    $finder = new EnumCaseTestFinder([], [$test => [
+        ($this->testCase)($test, 'checks the second case', ['T::second']),
+        ($this->testCase)($test, 'checks the first case', ['T::first']),
+    ]]);
+
+    expect($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'SECOND'")))->toBe(['T::second'])
+        ->and($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'FIRST'")))->toBe(['T::first']);
+});
+
+it('finds the executed tests of the class of a PHPUnit hook', function (): void {
+    $test = ($this->temporaryFile)(<<<'PHP_WRAP'
+    <?php
+    
+    use PHPUnit\Framework\TestCase;
+    use Tests\Fixtures\Enums\Generated\SameLine;
+    
+    final class SameLineCheck extends TestCase
+    {
+        private string $second;
+    
+        protected function setUp(): void
+        {
+            $this->second = SameLine::Second->value;
+        }
+    
+        public function test_second(): void
+        {
+            self::assertSame('SECOND', $this->second);
+        }
+    
+        private function first(): string
+        {
+            return SameLine::First->value;
+        }
+    }
+    PHP_WRAP);
+
+    $finder = new EnumCaseTestFinder([], [$test => [
+        ['ids' => ['SameLineCheck::test_second'], 'startLine' => ($this->lineOf)($test, 'function test_second'), 'endLine' => ($this->lineOf)($test, 'function test_second') + 3],
+    ]]);
+
+    expect($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'SECOND'")))->toBe(['SameLineCheck::test_second'])
+        ->and($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'FIRST'")))->toBe([]);
+});
+
 it('finds the test referencing the case in its dataset', function (): void {
     $test = ($this->temporaryFile)(<<<'PHP'
         <?php

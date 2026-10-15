@@ -59,6 +59,11 @@ class Mutate implements AddsOutput, Bootable, HandlesArguments
     final public const string ENV_MUTATION_FILE = 'PEST_MUTATION_FILE';
 
     /**
+     * The file in which the workers of a parallel initial test run record the tests they executed.
+     */
+    final public const string ENV_EXECUTED_TESTS_FILE = 'PEST_MUTATE_EXECUTED_TESTS_FILE';
+
+    /**
      * The Kernel bootstrappers.
      *
      * @var array<int, class-string>

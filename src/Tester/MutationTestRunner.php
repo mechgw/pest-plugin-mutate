@@ -18,6 +18,7 @@ use Pest\Mutate\Support\Configuration\Configuration;
 use Pest\Mutate\Support\EnumCaseTestFinder;
 use Pest\Mutate\Support\FileFinder;
 use Pest\Mutate\Support\MutationGenerator;
+use Pest\Plugins\Parallel;
 use Pest\Support\Container;
 use Pest\Support\Coverage;
 use Psr\SimpleCache\CacheInterface;
@@ -75,6 +76,18 @@ class MutationTestRunner implements MutationTestRunnerContract
         }
 
         $this->enabled = true;
+
+        // inherited by the workers of a parallel initial test run, which only inherit the
+        // variables also known to $_SERVER
+        if (! Parallel::isWorker() && getenv(Mutate::ENV_EXECUTED_TESTS_FILE) === false) {
+            $file = sys_get_temp_dir().DIRECTORY_SEPARATOR.uniqid('pest-mutate-executed-tests-', true);
+
+            putenv(Mutate::ENV_EXECUTED_TESTS_FILE.'='.$file);
+            $_SERVER[Mutate::ENV_EXECUTED_TESTS_FILE] = $_ENV[Mutate::ENV_EXECUTED_TESTS_FILE] = $file;
+
+            // the file is left over when the mutations are not tested, e.g. when a test fails
+            register_shutdown_function(static fn (): bool => is_file($file) && unlink($file));
+        }
     }
 
     public function isEnabled(): bool
@@ -139,10 +152,9 @@ class MutationTestRunner implements MutationTestRunnerContract
         /** @var TelemetryRepository $telemetryRepository */
         $telemetryRepository = Container::getInstance()->get(TelemetryRepository::class);
 
-        // the tests of a parallel run are not executed by this process, but some are in the code coverage
         $this->enumCaseTestFinder = $enumCaseTestFinder = EnumCaseTestFinder::fromExecutedTests(
             $coveredLines,
-            array_values(array_unique([...$telemetryRepository->executedTests(), ...$coverageData->testIds()])),
+            array_values(array_unique([...$telemetryRepository->executedTests(), ...$this->testsExecutedByWorkers(), ...$coverageData->testIds()])),
         );
 
         $files = FileFinder::files($this->getConfiguration()->paths, $this->getConfiguration()->pathsToIgnore);
@@ -232,6 +244,26 @@ class MutationTestRunner implements MutationTestRunnerContract
         }
 
         return array_any($caseValues, fn (array $caseValue): bool => $mutation->startFilePos !== null && $mutation->startFilePos >= $caseValue['startFilePos'] && $mutation->startFilePos <= $caseValue['endFilePos']);
+    }
+
+    /**
+     * Returns the tests executed by the workers of a parallel initial test run.
+     *
+     * @return array<int, string>
+     */
+    private function testsExecutedByWorkers(): array
+    {
+        $file = getenv(Mutate::ENV_EXECUTED_TESTS_FILE);
+
+        if (! is_string($file) || ! is_file($file)) {
+            return [];
+        }
+
+        $tests = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+        unlink($file);
+
+        return $tests === false ? [] : $tests;
     }
 
     /**

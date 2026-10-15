@@ -48,6 +48,20 @@ it('only considers the tests selected in a test file', function (): void {
         ->and(enumMutationTestSummary('Filtered', Status::class, [$filter]))->toBe('1 untested, 1 tested');
 });
 
+it('finds the selected tests executing no covered line', function (array $arguments): void {
+    // the enum is loaded before the test, so the code coverage has no trace of the test
+    expect(enumMutationTestSummary('Preloaded', Status::class, ['--covered-only', ...$arguments]))->toBe('1 tested');
+})->with([
+    'in this process' => [[]],
+    'in parallel workers' => [['--parallel']],
+]);
+
+it('does not consider a helper of a test file as used by the selected tests', function (): void {
+    // the helper referencing Published is called by no test
+    expect(enumMutationTestSummary('Helper', Status::class, ['--covered-only']))->toBe('1 tested')
+        ->and(enumMutationTestSummary('Helper', Status::class))->toBe('1 untested, 1 tested');
+});
+
 it('runs all the selected tests only when the tests referencing the case do not kill the mutant', function (): void {
     $sentinel = (string) tempnam(sys_get_temp_dir(), 'pest-mutate-sentinel');
 
