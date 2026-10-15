@@ -22,6 +22,7 @@ use Pest\Plugins\Parallel;
 use Pest\Support\Container;
 use Pest\Support\Coverage;
 use Psr\SimpleCache\CacheInterface;
+use RuntimeException;
 use SebastianBergmann\CodeCoverage\CodeCoverage;
 use SebastianBergmann\CodeCoverage\Data\ProcessedCodeCoverageData;
 
@@ -77,9 +78,15 @@ class MutationTestRunner implements MutationTestRunnerContract
 
         $this->enabled = true;
 
+        if (Parallel::isWorker()) {
+            return;
+        }
+
+        $file = getenv(Mutate::ENV_EXECUTED_TESTS_FILE);
+
         // inherited by the workers of a parallel initial test run, which only inherit the
         // variables also known to $_SERVER
-        if (! Parallel::isWorker() && getenv(Mutate::ENV_EXECUTED_TESTS_FILE) === false) {
+        if ($file === false) {
             $file = sys_get_temp_dir().DIRECTORY_SEPARATOR.uniqid('pest-mutate-executed-tests-', true);
 
             putenv(Mutate::ENV_EXECUTED_TESTS_FILE.'='.$file);
@@ -87,6 +94,12 @@ class MutationTestRunner implements MutationTestRunnerContract
 
             // the file is left over when the mutations are not tested, e.g. when a test fails
             register_shutdown_function(static fn (): bool => is_file($file) && unlink($file));
+        }
+
+        // created before the tests run, so that a missing file means a failure, not a run
+        // without tests, and a file that cannot be written stops the run before any test
+        if (! is_file($file) && (! is_dir(dirname($file)) || ! touch($file))) {
+            throw new RuntimeException(sprintf('Unable to create [%s], in which the parallel workers record the tests they execute.', $file));
         }
     }
 
@@ -152,9 +165,32 @@ class MutationTestRunner implements MutationTestRunnerContract
         /** @var TelemetryRepository $telemetryRepository */
         $telemetryRepository = Container::getInstance()->get(TelemetryRepository::class);
 
+        $executedTests = $telemetryRepository->executedTests();
+
+        if (Parallel::isEnabled()) {
+            $testsExecutedByWorkers = $this->testsExecutedByWorkers();
+
+            if ($testsExecutedByWorkers === null) {
+                Container::getInstance()->get(Printer::class)->reportError('Unable to read the tests executed by the parallel workers, aborting mutation testing.'); // @phpstan-ignore-line
+
+                return 1;
+            }
+
+            $executedTests = [...$executedTests, ...$testsExecutedByWorkers];
+        }
+
+        // every test of the code coverage was executed: one missing reveals an incomplete record
+        $unrecordedTests = array_diff($coverageData->testIds(), $executedTests);
+
+        if ($unrecordedTests !== []) {
+            Container::getInstance()->get(Printer::class)->reportError(sprintf('%d tests of the code coverage were not recorded as executed, aborting mutation testing.', count($unrecordedTests))); // @phpstan-ignore-line
+
+            return 1;
+        }
+
         $this->enumCaseTestFinder = $enumCaseTestFinder = EnumCaseTestFinder::fromExecutedTests(
             $coveredLines,
-            array_values(array_unique([...$telemetryRepository->executedTests(), ...$this->testsExecutedByWorkers(), ...$coverageData->testIds()])),
+            array_values(array_unique($executedTests)),
         );
 
         $files = FileFinder::files($this->getConfiguration()->paths, $this->getConfiguration()->pathsToIgnore);
@@ -247,23 +283,24 @@ class MutationTestRunner implements MutationTestRunnerContract
     }
 
     /**
-     * Returns the tests executed by the workers of a parallel initial test run.
+     * Returns the tests executed by the workers of a parallel initial test run, or null when
+     * they cannot be read.
      *
-     * @return array<int, string>
+     * @return array<int, string>|null
      */
-    private function testsExecutedByWorkers(): array
+    private function testsExecutedByWorkers(): ?array
     {
         $file = getenv(Mutate::ENV_EXECUTED_TESTS_FILE);
 
         if (! is_string($file) || ! is_file($file)) {
-            return [];
+            return null;
         }
 
         $tests = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 
         unlink($file);
 
-        return $tests === false ? [] : $tests;
+        return $tests === false ? null : $tests;
     }
 
     /**

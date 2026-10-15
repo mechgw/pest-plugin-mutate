@@ -16,6 +16,7 @@ use PhpParser\Node\Expr\ClassConstFetch;
 use PhpParser\Node\Expr\FuncCall;
 use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Stmt;
@@ -23,6 +24,7 @@ use PhpParser\Node\Stmt\ClassLike;
 use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\Node\Stmt\Enum_;
 use PhpParser\Node\Stmt\EnumCase;
+use PhpParser\Node\Stmt\Function_;
 use PhpParser\NodeFinder;
 use PHPUnit\Framework\Attributes\Test;
 use ReflectionClass;
@@ -279,6 +281,7 @@ final class EnumCaseTestFinder
 
             $nodes = $this->parse($contents);
             $testCases = $this->widenToStatements($nodes, $this->testCases[$file] ?? []);
+            $helperCalls = $this->helperCalls($nodes);
 
             foreach ($this->references($nodes, $enum) as [$case, $stmt, $reference]) {
                 foreach ($this->coveredLines[$file] ?? [] as $line => $ids) {
@@ -287,7 +290,7 @@ final class EnumCaseTestFinder
                     }
                 }
 
-                $testIds[$case] = [...$testIds[$case] ?? [], ...$this->executionsReaching($testCases, $stmt, $reference)];
+                $testIds[$case] = [...$testIds[$case] ?? [], ...$this->executionsReaching($testCases, $stmt, $reference, $helperCalls)];
             }
         }
 
@@ -330,23 +333,105 @@ final class EnumCaseTestFinder
 
     /**
      * Returns the ids of the executions of the tests whose code contains the given statement, or
-     * of the executed tests around which the hook containing it runs. Any other code of a test
-     * file, like a helper, may run for none of the executed tests: it reaches none.
+     * of the executed tests around which the hook containing it runs. Code of a helper of the
+     * test file (a function, or a method of a test class) reaches the executed tests calling it,
+     * directly or through other helpers of the file. Any other code reaches none, since it may
+     * run for none of the executed tests.
      *
      * @param  array<int, array{ids: array<int, string>, startLine: int, endLine: int}>  $testCases
+     * @param  array<string, array<int, Node>>  $helperCalls
+     * @param  array<string, true>  $visitedHelpers
      * @return array<int, string>
      */
-    private function executionsReaching(array $testCases, Stmt $stmt, Node $reference): array
+    private function executionsReaching(array $testCases, Stmt $stmt, Node $node, array $helperCalls, array $visitedHelpers = []): array
     {
         $containing = array_filter($testCases, fn (array $testCase): bool => $stmt->getStartLine() >= $testCase['startLine'] && $stmt->getEndLine() <= $testCase['endLine']);
 
-        if ($containing === []) {
-            $scope = $this->hookScope($reference);
-
-            $containing = $scope === null ? [] : array_filter($testCases, fn (array $testCase): bool => $testCase['startLine'] >= $scope[0] && $testCase['endLine'] <= $scope[1]);
+        if ($containing !== []) {
+            return array_merge(...array_column($containing, 'ids'));
         }
 
-        return array_merge(...array_column($containing, 'ids'));
+        $scope = $this->hookScope($node);
+
+        if ($scope !== null) {
+            return array_merge(...array_column(array_filter($testCases, fn (array $testCase): bool => $testCase['startLine'] >= $scope[0] && $testCase['endLine'] <= $scope[1]), 'ids'));
+        }
+
+        $helper = $this->enclosingHelper($node);
+
+        if ($helper === null || isset($visitedHelpers[$helper])) {
+            return [];
+        }
+
+        $visitedHelpers[$helper] = true;
+
+        $ids = [];
+
+        foreach ($helperCalls[$helper] ?? [] as $call) {
+            $callStmt = $this->innermostStatement($call);
+
+            if ($callStmt instanceof Stmt) {
+                $ids = [...$ids, ...$this->executionsReaching($testCases, $callStmt, $call, $helperCalls, $visitedHelpers)];
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * Returns the calls of the helpers of a test file: its functions, and the methods of its
+     * classes called on $this, self or static.
+     *
+     * @param  array<int, Node>  $nodes
+     * @return array<string, array<int, Node>>
+     */
+    private function helperCalls(array $nodes): array
+    {
+        $calls = [];
+
+        foreach ((new NodeFinder)->find($nodes, fn (Node $node): bool => $node instanceof FuncCall || $node instanceof MethodCall || $node instanceof StaticCall) as $call) {
+            $key = match (true) {
+                $call instanceof FuncCall && $call->name instanceof Name => 'function:'.strtolower($call->name->getLast()),
+                $call instanceof MethodCall && $call->var instanceof Variable && $call->var->name === 'this' && $call->name instanceof Identifier => 'method:'.$call->name->toLowerString(),
+                $call instanceof StaticCall && $call->class instanceof Name && in_array($call->class->toLowerString(), ['self', 'static'], true) && $call->name instanceof Identifier => 'method:'.$call->name->toLowerString(),
+                default => null,
+            };
+
+            if ($key !== null) {
+                $calls[$key][] = $call;
+            }
+        }
+
+        return $calls;
+    }
+
+    /**
+     * Returns the helper, function or method, whose code contains the given node.
+     */
+    private function enclosingHelper(Node $node): ?string
+    {
+        for ($parent = $node->getAttribute('parent'); $parent instanceof Node; $parent = $parent->getAttribute('parent')) {
+            if ($parent instanceof Function_) {
+                return 'function:'.$parent->name->toLowerString();
+            }
+
+            if ($parent instanceof ClassMethod) {
+                return 'method:'.$parent->name->toLowerString();
+            }
+        }
+
+        return null;
+    }
+
+    private function innermostStatement(Node $node): ?Stmt
+    {
+        $stmt = $node->getAttribute('parent');
+
+        while ($stmt instanceof Node && ! $stmt instanceof Stmt) {
+            $stmt = $stmt->getAttribute('parent');
+        }
+
+        return $stmt instanceof Stmt ? $stmt : null;
     }
 
     /**
@@ -445,11 +530,7 @@ final class EnumCaseTestFinder
                 continue;
             }
 
-            $stmt = $node->getAttribute('parent');
-
-            while ($stmt instanceof Node && ! $stmt instanceof Stmt) {
-                $stmt = $stmt->getAttribute('parent');
-            }
+            $stmt = $this->innermostStatement($node);
 
             if ($stmt instanceof Stmt) {
                 $references[] = [$name, $stmt, $node];

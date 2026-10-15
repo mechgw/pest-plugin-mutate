@@ -56,6 +56,50 @@ it('finds the selected tests executing no covered line', function (array $argume
     'in parallel workers' => [['--parallel']],
 ]);
 
+it('aborts before running the tests when the record of the executed tests cannot be created', function (): void {
+    $process = enumMutationTestProcess('Preloaded', Status::class, ['--covered-only', '--parallel'], [
+        'PEST_MUTATE_EXECUTED_TESTS_FILE' => sys_get_temp_dir().DIRECTORY_SEPARATOR.'pest-mutate-missing-directory'.DIRECTORY_SEPARATOR.'executed-tests',
+    ]);
+
+    expect($process->getExitCode())->not->toBe(0)
+        ->and($process->getOutput())->not->toContain('Mutations:')
+        ->and($process->getOutput().$process->getErrorOutput())->toContain('in which the parallel workers record the tests they execute');
+});
+
+it('does not test the mutations when a parallel worker cannot record an executed test', function (): void {
+    // a directory cannot be written as a file
+    $process = enumMutationTestProcess('Preloaded', Status::class, ['--covered-only', '--parallel'], [
+        'PEST_MUTATE_EXECUTED_TESTS_FILE' => sys_get_temp_dir(),
+    ]);
+
+    expect($process->getExitCode())->not->toBe(0)
+        ->and($process->getOutput())->not->toContain('Mutations:');
+});
+
+it('does not test the mutations when a parallel worker cannot write to a readable record', function (): void {
+    $file = (string) tempnam(sys_get_temp_dir(), 'pest-mutate-read-only');
+    chmod($file, 0444);
+
+    try {
+        // the main process can read the record, so only the worker notices the failure
+        $process = enumMutationTestProcess('Preloaded', Status::class, ['--covered-only', '--parallel'], [
+            'PEST_MUTATE_EXECUTED_TESTS_FILE' => $file,
+        ]);
+    } finally {
+        chmod($file, 0644);
+        @unlink($file);
+    }
+
+    expect($process->getExitCode())->not->toBe(0)
+        ->and($process->getOutput())->not->toContain('Mutations:');
+});
+
+it('considers a helper of a test file as used by the selected tests calling it', function (): void {
+    // each test reads a case through its own helper; the tests are not covered
+    expect(enumMutationTestSummary('HelperCalled', Status::class, ['--covered-only']))->toBe('2 tested')
+        ->and(enumMutationTestSummary('HelperCalled', Status::class, ['--covered-only', '--filter=checks the draft value']))->toBe('1 tested');
+});
+
 it('does not consider a helper of a test file as used by the selected tests', function (): void {
     // the helper referencing Published is called by no test
     expect(enumMutationTestSummary('Helper', Status::class, ['--covered-only']))->toBe('1 tested')

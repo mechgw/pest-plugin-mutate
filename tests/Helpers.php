@@ -85,6 +85,19 @@ function mutateCode(string $mutator, string $code): string
  */
 function enumMutationTestOutput(string $scenario, string $class, array $arguments = [], array $env = []): string
 {
+    $process = enumMutationTestProcess($scenario, $class, $arguments, $env);
+
+    return $process->getOutput().$process->getErrorOutput();
+}
+
+/**
+ * Runs the mutation tests of the given scenario of the enum fixtures, and returns the finished process.
+ *
+ * @param  array<int, string>  $arguments
+ * @param  array<string, string|false>  $env
+ */
+function enumMutationTestProcess(string $scenario, string $class, array $arguments = [], array $env = []): Process
+{
     $process = new Process(
         [
             PHP_BINARY,
@@ -112,7 +125,7 @@ function enumMutationTestOutput(string $scenario, string $class, array $argument
 
     $process->run();
 
-    return $process->getOutput().$process->getErrorOutput();
+    return $process;
 }
 
 /**
