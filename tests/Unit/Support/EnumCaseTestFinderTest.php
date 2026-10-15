@@ -304,6 +304,21 @@ it('finds the test referencing the case in its dataset', function (): void {
         ->and($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'SECOND'")))->toBe([]);
 });
 
+it('recognizes the keywords of a string-backed enum in any case', function (): void {
+    $enum = ($this->temporaryFile)(<<<'PHP'
+        <?php
+
+        namespace Tests\Fixtures\Enums\Generated;
+
+        ENUM UpperCase: STRING
+        {
+            case Only = 'ONLY';
+        }
+        PHP);
+
+    expect(new EnumCaseTestFinder([], [])->candidateTestIds(($this->mutationOf)($enum, "'ONLY'")))->toBe([]);
+});
+
 it('runs every selected test for a mutation cached without its position', function (): void {
     $second = ($this->mutationOf)($this->sameLine, "'SECOND'");
 

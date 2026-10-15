@@ -221,9 +221,9 @@ final class EnumCaseTestFinder
 
         $contents = is_file($file) ? file_get_contents($file) : false;
 
-        if ($contents !== false && str_contains($contents, 'enum')) {
+        if ($contents !== false && stripos($contents, 'enum') !== false) {
             foreach ((new NodeFinder)->findInstanceOf($this->parse($contents), Enum_::class) as $enum) {
-                if ($enum->scalarType?->toString() !== 'string' || ! $enum->namespacedName instanceof Name) {
+                if ($enum->scalarType?->toLowerString() !== 'string' || ! $enum->namespacedName instanceof Name) {
                     continue;
                 }
 
