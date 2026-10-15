@@ -139,8 +139,10 @@ function enumMutationTestSummary(string $scenario, string $class, array $argumen
  */
 function enumFixturesConfiguration(): string
 {
-    $directory = sys_get_temp_dir().DIRECTORY_SEPARATOR.'pest-mutate-enum-fixtures';
     $root = dirname(__DIR__);
+    // inside the repository: when the covered files only share the root directory,
+    // php-code-coverage reports them without their leading separator
+    $directory = $root.DIRECTORY_SEPARATOR.'.temp'.DIRECTORY_SEPARATOR.'enum-fixtures';
 
     if (! is_dir($directory)) {
         mkdir($directory);
