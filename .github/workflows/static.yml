@@ -5,12 +5,17 @@ on: ['push', 'pull_request']
 permissions:
   contents: read
 
+# CI-only branch of a fork: Composer cannot guess the root version of a feature branch
+env:
+  COMPOSER_ROOT_VERSION: 5.x-dev
+
 jobs:
   static:
     name: Static Tests
 
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         dependency-version: [prefer-lowest, prefer-stable]
 
