@@ -120,6 +120,13 @@ it('considers a helper of a test file as used by the selected tests calling it',
         ->and(enumMutationTestSummary('HelperCalled', Status::class, ['--covered-only', '--filter=checks the draft value']))->toBe('1 tested');
 });
 
+it('skips the cases used only through a helper of another file or a closure held in a variable', function (): void {
+    // a documented limit: these references are not followed, so --covered-only conservatively
+    // leaves their cases out, while all the selected tests still verify them otherwise
+    expect(enumMutationTestSummary('OutOfScope', Status::class, ['--covered-only']))->toBe('0 tested')
+        ->and(enumMutationTestSummary('OutOfScope', Status::class))->toBe('2 tested');
+});
+
 it('does not consider a helper of a test file as used by the selected tests', function (): void {
     // the helper referencing Published is called by no test
     expect(enumMutationTestSummary('Helper', Status::class, ['--covered-only']))->toBe('1 tested')
