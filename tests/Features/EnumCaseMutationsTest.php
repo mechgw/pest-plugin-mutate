@@ -87,11 +87,31 @@ it('does not test the mutations when a parallel worker cannot write to a readabl
         ]);
     } finally {
         chmod($file, 0644);
-        @unlink($file);
+        if (is_file($file)) {
+            unlink($file);
+        }
     }
 
     expect($process->getExitCode())->not->toBe(0)
         ->and($process->getOutput())->not->toContain('Mutations:');
+});
+
+it('aborts when the record of the tests executed by the parallel workers is cut', function (): void {
+    $file = (string) tempnam(sys_get_temp_dir(), 'pest-mutate-cut-record');
+    // a line cut before its end, as left by an interrupted write
+    file_put_contents($file, 'P\\Tests\\tests\\Enums\\Preloaded\\StatusValueTest::__pest_eval');
+
+    $process = enumMutationTestProcess('Preloaded', Status::class, ['--covered-only', '--parallel'], [
+        'PEST_MUTATE_EXECUTED_TESTS_FILE' => $file,
+    ]);
+
+    if (is_file($file)) {
+        unlink($file);
+    }
+
+    expect($process->getExitCode())->not->toBe(0)
+        ->and($process->getOutput())->not->toContain('Mutations:')
+        ->and($process->getOutput())->toContain('Unable to read a complete record of the tests executed by the parallel workers');
 });
 
 it('considers a helper of a test file as used by the selected tests calling it', function (): void {

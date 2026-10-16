@@ -379,8 +379,8 @@ final class EnumCaseTestFinder
     }
 
     /**
-     * Returns the calls of the helpers of a test file: its functions, and the methods of its
-     * classes called on $this, self or static.
+     * Returns the calls of the helpers of a test file: its functions, by their namespaced name,
+     * and the methods of its classes called on $this, self or static, by their class.
      *
      * @param  array<int, Node>  $nodes
      * @return array<string, array<int, Node>>
@@ -391,9 +391,9 @@ final class EnumCaseTestFinder
 
         foreach ((new NodeFinder)->find($nodes, fn (Node $node): bool => $node instanceof FuncCall || $node instanceof MethodCall || $node instanceof StaticCall) as $call) {
             $key = match (true) {
-                $call instanceof FuncCall && $call->name instanceof Name => 'function:'.strtolower($call->name->getLast()),
-                $call instanceof MethodCall && $call->var instanceof Variable && $call->var->name === 'this' && $call->name instanceof Identifier => 'method:'.$call->name->toLowerString(),
-                $call instanceof StaticCall && $call->class instanceof Name && in_array($call->class->toLowerString(), ['self', 'static'], true) && $call->name instanceof Identifier => 'method:'.$call->name->toLowerString(),
+                $call instanceof FuncCall && $call->name instanceof Name => $this->functionKey($call->name),
+                $call instanceof MethodCall && $call->var instanceof Variable && $call->var->name === 'this' && $call->name instanceof Identifier => $this->methodKey($call, $call->name),
+                $call instanceof StaticCall && $call->class instanceof Name && in_array($call->class->toLowerString(), ['self', 'static'], true) && $call->name instanceof Identifier => $this->methodKey($call, $call->name),
                 default => null,
             };
 
@@ -412,11 +412,39 @@ final class EnumCaseTestFinder
     {
         for ($parent = $node->getAttribute('parent'); $parent instanceof Node; $parent = $parent->getAttribute('parent')) {
             if ($parent instanceof Function_) {
-                return 'function:'.$parent->name->toLowerString();
+                return 'function:'.strtolower($parent->namespacedName?->toString() ?? $parent->name->toString());
             }
 
             if ($parent instanceof ClassMethod) {
-                return 'method:'.$parent->name->toLowerString();
+                return $this->methodKey($parent, $parent->name);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * An unqualified call in a namespace runs the function of the namespace when it is defined,
+     * like a helper of the test file.
+     */
+    private function functionKey(Name $name): string
+    {
+        $resolvedName = $name->getAttribute('resolvedName') ?? $name->getAttribute('namespacedName') ?? $name;
+
+        return 'function:'.strtolower($resolvedName instanceof Name ? $resolvedName->toString() : $name->toString());
+    }
+
+    /**
+     * Returns the key of the method of the class containing the given node, or null in an
+     * anonymous class.
+     */
+    private function methodKey(Node $node, Identifier $method): ?string
+    {
+        for ($parent = $node->getAttribute('parent'); $parent instanceof Node; $parent = $parent->getAttribute('parent')) {
+            if ($parent instanceof ClassLike) {
+                return $parent->namespacedName instanceof Name
+                    ? 'method:'.strtolower($parent->namespacedName->toString()).'::'.$method->toLowerString()
+                    : null;
             }
         }
 

@@ -6,11 +6,11 @@ namespace Pest\Mutate\Subscribers;
 
 use Pest\Mutate\Plugins\Mutate;
 use Pest\Mutate\Repositories\TelemetryRepository;
+use Pest\Mutate\Support\ExecutedTestsRecord;
 use Pest\Plugins\Parallel;
 use Pest\Support\Container;
 use PHPUnit\Event\Test\Prepared;
 use PHPUnit\Event\Test\PreparedSubscriber;
-use RuntimeException;
 
 /**
  * Records the tests of the initial test run: the code coverage omits the tests that execute no
@@ -35,8 +35,6 @@ final class TrackExecutedTests implements PreparedSubscriber
             return;
         }
 
-        if (file_put_contents($file, $event->test()->id()."\n", FILE_APPEND | LOCK_EX) === false) {
-            throw new RuntimeException(sprintf('Unable to record the executed test [%s] in [%s].', $event->test()->id(), $file));
-        }
+        ExecutedTestsRecord::append($file, $event->test()->id());
     }
 }

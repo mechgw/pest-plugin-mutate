@@ -16,6 +16,7 @@ use Pest\Mutate\Repositories\ConfigurationRepository;
 use Pest\Mutate\Repositories\TelemetryRepository;
 use Pest\Mutate\Support\Configuration\Configuration;
 use Pest\Mutate\Support\EnumCaseTestFinder;
+use Pest\Mutate\Support\ExecutedTestsRecord;
 use Pest\Mutate\Support\FileFinder;
 use Pest\Mutate\Support\MutationGenerator;
 use Pest\Plugins\Parallel;
@@ -171,7 +172,7 @@ class MutationTestRunner implements MutationTestRunnerContract
             $testsExecutedByWorkers = $this->testsExecutedByWorkers();
 
             if ($testsExecutedByWorkers === null) {
-                Container::getInstance()->get(Printer::class)->reportError('Unable to read the tests executed by the parallel workers, aborting mutation testing.'); // @phpstan-ignore-line
+                Container::getInstance()->get(Printer::class)->reportError('Unable to read a complete record of the tests executed by the parallel workers, aborting mutation testing.'); // @phpstan-ignore-line
 
                 return 1;
             }
@@ -284,7 +285,7 @@ class MutationTestRunner implements MutationTestRunnerContract
 
     /**
      * Returns the tests executed by the workers of a parallel initial test run, or null when
-     * they cannot be read.
+     * they cannot be read, or when their record is incomplete or corrupted.
      *
      * @return array<int, string>|null
      */
@@ -296,11 +297,11 @@ class MutationTestRunner implements MutationTestRunnerContract
             return null;
         }
 
-        $tests = file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        $contents = file_get_contents($file);
 
         unlink($file);
 
-        return $tests === false ? null : $tests;
+        return $contents === false ? null : ExecutedTestsRecord::parse($contents);
     }
 
     /**

@@ -317,6 +317,88 @@ it('finds the executed tests calling a helper method of a PHPUnit test class', f
         ->and($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'SECOND'")))->toBe([]);
 });
 
+it('tells apart the helper methods of the same name of two test classes', function (): void {
+    $test = ($this->temporaryFile)(<<<'PHP_WRAP'
+    <?php
+    
+    use PHPUnit\Framework\TestCase;
+    use Tests\Fixtures\Enums\Generated\SameLine;
+    
+    final class FirstCaseCheck extends TestCase
+    {
+        public function test_it(): void
+        {
+            self::assertSame('FIRST', $this->value());
+        }
+    
+        private function value(): string
+        {
+            return SameLine::First->value;
+        }
+    }
+    
+    final class SecondCaseCheck extends TestCase
+    {
+        public function test_it(): void
+        {
+            self::assertSame('SECOND', $this->value());
+        }
+    
+        private function value(): string
+        {
+            return SameLine::Second->value;
+        }
+    }
+    PHP_WRAP);
+
+    $lines = (array) file($test);
+    $testLines = array_keys(array_filter($lines, fn (mixed $line): bool => str_contains((string) $line, 'function test_it')));
+
+    // only the test of the second class is selected, e.g. with --filter
+    $finder = new EnumCaseTestFinder([], [$test => [
+        ['ids' => [], 'startLine' => $testLines[0] + 1, 'endLine' => $testLines[0] + 4],
+        ['ids' => ['SecondCaseCheck::test_it'], 'startLine' => $testLines[1] + 1, 'endLine' => $testLines[1] + 4],
+    ]]);
+
+    expect($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'SECOND'")))->toBe(['SecondCaseCheck::test_it'])
+        ->and($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'FIRST'")))->toBe([]);
+});
+
+it('tells apart the helper functions of the same name of two namespaces', function (): void {
+    $test = ($this->temporaryFile)(<<<'PHP'
+        <?php
+
+        namespace First {
+            use Tests\Fixtures\Enums\Generated\SameLine;
+
+            function value(): string
+            {
+                return SameLine::First->value;
+            }
+        }
+
+        namespace Second {
+            use Tests\Fixtures\Enums\Generated\SameLine;
+
+            function value(): string
+            {
+                return SameLine::Second->value;
+            }
+
+            it('checks the second case', function () {
+                expect(value())->toBe('SECOND');
+            });
+        }
+        PHP);
+
+    $finder = new EnumCaseTestFinder([], [$test => [
+        ($this->testCase)($test, 'checks the second case', ['T::second']),
+    ]]);
+
+    expect($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'SECOND'")))->toBe(['T::second'])
+        ->and($finder->candidateTestIds(($this->mutationOf)($this->sameLine, "'FIRST'")))->toBe([]);
+});
+
 it('finds the executed tests of the describe block of a hook', function (): void {
     $test = ($this->temporaryFile)(<<<'PHP'
         <?php
