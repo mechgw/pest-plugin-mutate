@@ -10,8 +10,10 @@ use Pest\Mutate\Plugins\Mutate;
 use Pest\Mutate\Repositories\TelemetryRepository;
 use Pest\Mutate\Support\Configuration\Configuration;
 use Pest\Mutate\Support\EnumCaseTestFinder;
+use Pest\Mutate\Support\EnumCaseValueTimeout;
 use Pest\Mutate\Support\MutationTestResult;
 use Pest\Mutate\Support\TestRunOutcome;
+use Pest\Plugins\Parallel;
 use Pest\Support\Container;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
@@ -106,7 +108,7 @@ class MutationTest
         $filteredArguments = array_filter($originalArguments, fn (string $argument): bool => ! str_starts_with($argument, '--coverage'));
 
         if ($candidateTests !== null) {
-            $this->startEnumCaseValueVerification($filteredArguments, $envs, $this->filters([...$tests, ...$candidateTests]));
+            $this->startEnumCaseValueVerification($filteredArguments, $envs, $this->filters([...$tests, ...$candidateTests]), $configuration);
 
             return true;
         }
@@ -162,18 +164,24 @@ class MutationTest
      * @param  array<string, string>  $envs
      * @param  array<int, string>  $candidateFilters
      */
-    private function startEnumCaseValueVerification(array $arguments, array $envs, array $candidateFilters): void
+    private function startEnumCaseValueVerification(array $arguments, array $envs, array $candidateFilters, Configuration $configuration): void
     {
         $this->junitPath = (string) tempnam(sys_get_temp_dir(), 'pest-mutate-junit-');
 
         $command = [...$arguments, '--bail', '--log-junit='.$this->junitPath];
-        $timeout = $this->calculateTimeout();
+
+        // all the originally selected tests run one after the other, even after a parallel initial test run
+        $fullRunTimeout = EnumCaseValueTimeout::seconds(
+            $this->calculateTimeout(),
+            $configuration->enumTimeout,
+            Parallel::isEnabled() ? $configuration->processes : 1,
+        );
 
         if ($candidateFilters === []) {
-            $this->process = new Process($command, env: $envs, timeout: $timeout);
+            $this->process = new Process($command, env: $envs, timeout: $fullRunTimeout);
         } else {
-            $this->process = new Process([...$command, '--filter="'.implode('|', $candidateFilters).'"'], env: $envs, timeout: $timeout);
-            $this->fallbackProcess = new Process($command, env: $envs, timeout: $timeout);
+            $this->process = new Process([...$command, '--filter="'.implode('|', $candidateFilters).'"'], env: $envs, timeout: $this->calculateTimeout());
+            $this->fallbackProcess = new Process($command, env: $envs, timeout: $fullRunTimeout);
         }
 
         $this->start = microtime(true);
@@ -235,6 +243,29 @@ class MutationTest
     }
 
     /**
+     * All the originally selected tests did not finish within their time limit. Unlike the tests
+     * covering a mutated line, they may simply be too slow: the timeout is no evidence of a killed mutant.
+     */
+    private function finishTimedOutEnumCaseValueVerification(): bool
+    {
+        $this->readJunitReport();
+        $this->junitPath = null;
+
+        $this->inconclusiveReason = sprintf(
+            'Not verified: the tests did not finish within the time limit of %d s (--enum-timeout). A timeout is no evidence of a killed mutant.',
+            (int) $this->process->getTimeout(),
+        );
+
+        $this->updateResult(MutationTestResult::Uncovered);
+
+        Facade::instance()->emitter()->mutationUncovered($this);
+
+        $this->finish = microtime(true);
+
+        return true;
+    }
+
+    /**
      * Returns the contents of the JUnit report and deletes it, so that a next process starts without one.
      */
     private function readJunitReport(): string
@@ -273,8 +304,9 @@ class MutationTest
                 return false;
             }
 
-            $this->readJunitReport();
-            $this->junitPath = null;
+            if ($this->junitPath !== null) {
+                return $this->finishTimedOutEnumCaseValueVerification();
+            }
 
             $this->updateResult(MutationTestResult::Timeout);
 

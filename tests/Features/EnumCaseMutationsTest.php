@@ -157,8 +157,37 @@ it('does not consider a test run failing before running any test as killing the 
         ->toContain('Not verified: the tests ended with exit code 2 and no JUnit report.');
 });
 
-it('reports a timeout when all the selected tests time out', function (): void {
-    expect(enumMutationTestSummary('Timeout', Single::class))->toBe('1 timeout, 0 tested');
+it('does not consider all the selected tests timing out as killing the mutant', function (): void {
+    $output = enumMutationTestOutput('Timeout', Single::class);
+
+    expect($output)->toContain('Mutations: 1 uncovered, 0 tested')
+        ->toContain('Not verified: the tests did not finish within the time limit of');
+});
+
+it('does not consider all the selected tests exceeding a raised time limit as killing the mutant', function (): void {
+    $process = enumMutationTestProcess('SlowUnchecked', Single::class, ['--enum-timeout=10', '--min=100']);
+
+    // the reason follows the line of the mutant, so that a wrapper can tell it from an uncovered line
+    expect($process->getOutput())->toContain('Mutations: 1 uncovered, 0 tested')
+        ->toContain('Score:     0.00%')
+        ->toMatch('/UNCOVERED .+ - ID: \S+\R  Not verified: the tests did not finish within the time limit of 10 s \(--enum-timeout\)\. A timeout is no evidence of a killed mutant\./')
+        ->and($process->getExitCode())->toBe(1);
+});
+
+it('keeps reporting a timeout of the tests covering a mutated line as a timeout', function (): void {
+    $process = enumMutationTestProcess('CoveredTimeout', PublicationLabel::class, ['--min=100']);
+
+    // unlike the verification of an enum case value, the run of the tests covering a line counts a timeout as a kill
+    expect($process->getOutput())->toContain('Mutations: 1 timeout, 0 tested')
+        ->toContain('Score:     100.00%')
+        ->not->toContain('Not verified:')
+        ->and($process->getExitCode())->toBe(0);
+});
+
+it('kills the mutant when all the selected tests fail within the configured time limit', function (): void {
+    expect(enumMutationTestSummary('SlowChecked', Single::class, ['--enum-timeout=60']))->toBe('1 tested')
+        // the default time limit, derived from the initial test run, is too short
+        ->and(enumMutationTestSummary('SlowChecked', Single::class))->toBe('1 uncovered, 0 tested');
 });
 
 it('keeps reporting the uncovered lines of other code as uncovered', function (): void {
