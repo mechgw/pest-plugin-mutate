@@ -304,9 +304,8 @@ class MutationTest
                 return false;
             }
 
-            if ($this->junitPath !== null) {
-                return $this->finishTimedOutEnumCaseValueVerification();
-            }
+            $this->readJunitReport();
+            $this->junitPath = null;
 
             $this->updateResult(MutationTestResult::Timeout);
 
