@@ -36,6 +36,8 @@ interface Configuration
 
     public function processes(?int $processes = null): self;
 
+    public function enumTimeout(int $seconds): self;
+
     public function profile(bool $profile = true): self;
 
     public function stopOnUntested(bool $stopOnUntested = true): self;

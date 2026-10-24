@@ -137,6 +137,25 @@ it('sets the processes option if --processes argument is passed', function (): v
         ->processes->toBeNull();
 });
 
+it('sets the time limit of the run verifying the value of an enum case if --enum-timeout argument is passed', function (): void {
+    $this->configuration->fromArguments(['--mutate='.ConfigurationRepository::FAKE]);
+    expect($this->configuration->toArray())
+        ->enum_timeout->toBeNull();
+
+    // not an option of the test runner
+    expect($this->configuration->fromArguments(['--enum-timeout=600']))->toBe([])
+        ->and($this->configuration->toArray())
+        ->enum_timeout->toBe(600);
+});
+
+it('rejects a time limit of the run verifying the value of an enum case that is not a positive number', function (string $argument): void {
+    $this->configuration->fromArguments([$argument]);
+})->with([
+    '--enum-timeout=0',
+    '--enum-timeout=-5',
+    '--enum-timeout=never',
+])->throws(InvalidArgumentException::class);
+
 it('sets the class if --class argument is passed', function (): void {
     $this->configuration->fromArguments(['--class='.AgeHelper::class]);
     expect($this->configuration->toArray()['classes'])

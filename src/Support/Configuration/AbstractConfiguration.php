@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Pest\Mutate\Support\Configuration;
 
+use InvalidArgumentException;
 use Pest\Mutate\Contracts\Configuration as ConfigurationContract;
 use Pest\Mutate\Contracts\Mutator;
 use Pest\Mutate\Contracts\MutatorSet;
@@ -45,6 +46,8 @@ abstract class AbstractConfiguration implements ConfigurationContract
     private ?bool $parallel = null;
 
     private ?int $processes = null;
+
+    private ?int $enumTimeout = null;
 
     private ?bool $profile = null;
 
@@ -137,6 +140,18 @@ abstract class AbstractConfiguration implements ConfigurationContract
         return $this;
     }
 
+    public function enumTimeout(int $seconds): self
+    {
+        // a limit of zero would let the run of the tests never time out
+        if ($seconds < 1) {
+            throw new InvalidArgumentException(sprintf('The time limit of the run verifying the value of an enum case must be a positive number of seconds, [%d] given.', $seconds));
+        }
+
+        $this->enumTimeout = $seconds;
+
+        return $this;
+    }
+
     public function profile(bool $profile = true): self
     {
         $this->profile = $profile;
@@ -194,7 +209,7 @@ abstract class AbstractConfiguration implements ConfigurationContract
     }
 
     /**
-     * @return array{covered_only?: bool, paths?: string[], paths_to_ignore?: string[], mutators?: class-string<Mutator>[], excluded_mutators?: class-string<Mutator>[], classes?: string[], parallel?: bool, processes?: int, profile?: bool, min_score?: float, ignore_min_score_on_zero_mutations?: bool, covered_only?: bool, stop_on_untested?: bool, stop_on_uncovered?: bool, mutation_id?: string, retry?: bool, everything?: bool}
+     * @return array{covered_only?: bool, paths?: string[], paths_to_ignore?: string[], mutators?: class-string<Mutator>[], excluded_mutators?: class-string<Mutator>[], classes?: string[], parallel?: bool, processes?: int, enum_timeout?: int, profile?: bool, min_score?: float, ignore_min_score_on_zero_mutations?: bool, covered_only?: bool, stop_on_untested?: bool, stop_on_uncovered?: bool, mutation_id?: string, retry?: bool, everything?: bool}
      */
     public function toArray(): array
     {
@@ -207,6 +222,7 @@ abstract class AbstractConfiguration implements ConfigurationContract
             'classes' => $this->classes,
             'parallel' => $this->parallel,
             'processes' => $this->processes,
+            'enum_timeout' => $this->enumTimeout,
             'profile' => $this->profile,
             'min_score' => $this->minScore,
             'ignore_min_score_on_zero_mutations' => $this->ignoreMinScoreOnZeroMutations,

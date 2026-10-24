@@ -109,6 +109,7 @@ class ConfigurationRepository
             mutationId: $config['mutation_id'] ?? null,
             retry: $config['retry'] ?? false,
             everything: $config['everything'] ?? false,
+            enumTimeout: $config['enum_timeout'] ?? null,
         );
     }
 

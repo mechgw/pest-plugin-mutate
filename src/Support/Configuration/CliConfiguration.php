@@ -9,6 +9,7 @@ use Pest\Mutate\Options\BailOption;
 use Pest\Mutate\Options\ClassOption;
 use Pest\Mutate\Options\ClearCacheOption;
 use Pest\Mutate\Options\CoveredOnlyOption;
+use Pest\Mutate\Options\EnumTimeoutOption;
 use Pest\Mutate\Options\EverythingOption;
 use Pest\Mutate\Options\ExceptOption;
 use Pest\Mutate\Options\IgnoreMinScoreOnZeroMutationsOption;
@@ -43,6 +44,7 @@ class CliConfiguration extends AbstractConfiguration
         IgnoreOption::class,
         ParallelOption::class,
         ProcessesOption::class,
+        EnumTimeoutOption::class,
         ProfileOption::class,
         StopOnUntestedOption::class,
         StopOnUncoveredOption::class,
@@ -112,6 +114,10 @@ class CliConfiguration extends AbstractConfiguration
 
         if ($input->hasOption(ProcessesOption::ARGUMENT)) {
             $this->processes($input->getOption(ProcessesOption::ARGUMENT) !== null ? (int) $input->getOption(ProcessesOption::ARGUMENT) : null); // @phpstan-ignore-line
+        }
+
+        if ($input->hasOption(EnumTimeoutOption::ARGUMENT)) {
+            $this->enumTimeout((int) $input->getOption(EnumTimeoutOption::ARGUMENT)); // @phpstan-ignore-line
         }
 
         if ($input->hasOption(ProfileOption::ARGUMENT)) {

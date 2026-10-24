@@ -135,6 +135,7 @@ The following options are available.
 - [`retry()`](#retry)
 - [`min()`](#min)
 - [`ignoreMinScoreOnZeroMutations()`](#ignoreMinScoreOnZeroMutations)
+- [`enumTimeout()`](#enumTimeout)
 - [`--id`](#--id)
 - [`--no-cache`](#--no-cache)
 - [`--clear-cache`](#--clear-cache)
@@ -341,6 +342,22 @@ mutate()
 ```
 
 
+<a name="options-enum-timeout"></a>
+### `enumTimeout()`
+CLI: `--enum-timeout`
+
+Set the time limit, in seconds, of the run verifying the mutation of an enum case value. See [Mutations of enum case values](#mutations-of-enum-case-values).
+
+```php
+mutate()
+    ->enumTimeout(1800);
+```
+
+```bash
+vendor/bin/pest --mutate --parallel --enum-timeout=1800
+```
+
+
 <a name="options-id"></a>
 ### `--id`
 
@@ -453,6 +470,36 @@ It outputs a list of the ten slowest mutations.
 ```bash
 vendor/bin/pest --mutate --profile
 ```
+
+<a name="mutations-of-enum-case-values"></a>
+## Mutations of enum case values
+
+The value of a case of a string-backed enum is not an executable line: the code coverage never reports it as covered. Its mutations are verified in two steps:
+
+1. The tests referencing the case run first. A failing test kills the mutant.
+2. When none of them fails, all the originally selected tests run, one after the other. A failing test kills the mutant, and a passing run lets it escape.
+
+Only a failed test, read from the JUnit report of the run, kills such a mutant.
+
+### Time limit
+
+Even after a parallel initial test run, the run of all the selected tests is not parallel. Its time limit is therefore not the one of the other mutations:
+
+- with `enumTimeout()` or `--enum-timeout`, it is the given number of seconds;
+- otherwise, it is the time limit of the other mutations multiplied by the number of processes of a parallel initial test run. This is an estimate of a serial run, not a guarantee: a busy machine or a larger test suite can exceed it. Set `--enum-timeout` to the duration of a serial run of the selected tests when you run them in parallel.
+
+The tests referencing the case keep the time limit of the other mutations.
+
+### Not verified mutants
+
+A run that does not finish within its time limit, or that ends without a reliable result, is no evidence of a killed mutant. Unlike the other mutations, such a mutant is not reported as a timeout and is not counted as killed: it is reported as not covered, and it lowers the mutation score. Its line in the summary is followed by the reason, which always starts with `Not verified:`.
+
+```
+   UNCOVERED  src/Enums/Status.php  > Line 9: NotEmptyStringToEmpty - ID: b3fd5dddfe401c9d
+  Not verified: the tests did not finish within the time limit of 1800 s (--enum-timeout). A timeout is no evidence of a killed mutant.
+```
+
+A tool reading the output can tell such a mutant from a line no test covers by the `Not verified:` line following the `UNCOVERED` line of the same mutation ID.
 
 ## Ignoring Mutations
 
